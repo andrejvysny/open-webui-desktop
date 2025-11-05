@@ -40,14 +40,42 @@ dmg:
           type: link
           path: /Applications
 linux:
-    target:
-        - AppImage
-        - snap
-        - deb
+        artifactName: ${name}-${version}-${arch}.${ext}
+        target:
+                - target: AppImage
+                    arch:
+                            - x64
+                            - arm64
+                - target: flatpak
+                    arch:
+                            - x64
+                            - arm64
+                - target: snap
+                    arch:
+                            - x64
+                            - arm64
+                - target: deb
+                    arch:
+                            - x64
+                            - arm64
     maintainer: openwebui.com
     category: Utility
 appImage:
-    artifactName: ${name}-${version}.${ext}
+    artifactName: ${name}-${version}-${arch}.${ext}
+flatpak:
+    runtime: org.freedesktop.Platform
+    runtimeVersion: "23.08"
+    sdk: org.freedesktop.Sdk
+    base: org.electronjs.Electron2.BaseApp
+    baseVersion: "23.08"
+    finishArgs:
+        - --share=network
+        - --share=ipc
+        - --socket=x11
+        - --socket=wayland
+        - --talk-name=org.freedesktop.Notifications
+        - --device=dri
+        - --filesystem=home
 npmRebuild: false
 publish:
     provider: generic

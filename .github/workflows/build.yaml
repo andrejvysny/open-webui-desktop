@@ -1,10 +1,12 @@
 name: Build and Release Electron App (electron-builder)
 
 on:
-    push:
-        branches:
-            - release
-    pull_request:
+  workflow_dispatch:
+    # Enables manual triggering for test builds; remove once automated triggers are restored.
+#    push:
+#        branches:
+#            - release
+#    pull_request:
 
 jobs:
     build:
@@ -13,16 +15,21 @@ jobs:
         strategy:
             matrix:
                 include:
-                    # - os: ubuntu-latest
-                    #   arch: x64
-                    # - os: ubuntu-latest
-                    #   arch: arm64
+                    - os: ubuntu-22.04
+                      arch: x64
+                      artifactLabel: linux-x64
+                    - os: ubuntu-22.04-arm64
+                      arch: arm64
+                      artifactLabel: linux-arm64
                     - os: windows-latest
                       arch: x64
+                      artifactLabel: windows-x64
                     - os: macos-latest
                       arch: x64
+                      artifactLabel: macos-x64
                     - os: macos-latest
                       arch: arm64
+                      artifactLabel: macos-arm64
         steps:
             - name: Checkout Repository
               uses: actions/checkout@v4
@@ -35,6 +42,23 @@ jobs:
 
             - name: Install Dependencies
               run: npm ci
+
+            - name: Install Linux Packaging Dependencies
+              if: ${{ startsWith(matrix.os, 'ubuntu-') }}
+              run: |
+                  sudo apt-get update
+                  sudo apt-get install -y --no-install-recommends flatpak flatpak-builder elfutils fuse3 libfuse2 desktop-file-utils
+
+            - name: Provision Flatpak Runtimes
+              if: ${{ startsWith(matrix.os, 'ubuntu-') }}
+              run: |
+                  flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+                  if [ "${{ matrix.arch }}" = "arm64" ]; then
+                    flatpak_arch=aarch64
+                  else
+                    flatpak_arch=x86_64
+                  fi
+                  flatpak install -y --noninteractive --arch=${flatpak_arch} --or-update flathub org.freedesktop.Platform//23.08 org.freedesktop.Sdk//23.08 org.electronjs.Electron2.BaseApp//23.08
 
             - name: Install Apple codesigning certificate
               if: ${{ matrix.os == 'macos-latest' }}
@@ -66,7 +90,7 @@ jobs:
               run: npm run build:mac
 
             - name: Create Linux Builds
-              if: ${{ matrix.os == 'ubuntu-latest' }}
+              if: ${{ startsWith(matrix.os, 'ubuntu-') }}
               run: npm run build:linux
 
             - name: Find and Rename Windows Executable
@@ -76,7 +100,7 @@ jobs:
                   $exePath = Get-ChildItem -Path dist -Recurse -Filter "*.exe" | Select-Object -First 1
                   if (-not $exePath) { throw "Error: No .exe file was found in dist."; }
                   Write-Host "The found executable is: $($exePath.FullName)"
-                  $destinationPath = "${{ matrix.os }}-${{ matrix.arch }}.exe"
+                  $destinationPath = "${{ matrix.artifactLabel }}.exe"
                   Copy-Item -Path $exePath.FullName -Destination $destinationPath
                   Write-Host "Copied executable to: $destinationPath"
 
@@ -87,8 +111,8 @@ jobs:
                     package_file=$(find dist -maxdepth 1 -name "*.dmg" -o -name "*.zip" -o -name "*.pkg" | head -1)
                     if [ -n "$package_file" ]; then
                       extension="${package_file##*.}"
-                      cp "$package_file" "${{ matrix.os }}-${{ matrix.arch }}.$extension"
-                      echo "Copied package to: ${{ matrix.os }}-${{ matrix.arch }}.$extension"
+                      cp "$package_file" "${{ matrix.artifactLabel }}.$extension"
+                      echo "Copied package to: ${{ matrix.artifactLabel }}.$extension"
                     else
                       echo "No macOS package found in dist"
                       ls -la dist/ || echo "dist directory not found or empty"
@@ -98,18 +122,18 @@ jobs:
                   fi
 
             - name: Find and Rename Linux Packages
-              if: ${{ matrix.os == 'ubuntu-latest' }}
+              if: ${{ startsWith(matrix.os, 'ubuntu-') }}
               run: |
                   if [ -d "dist" ]; then
                     shopt -s nullglob
-                    for package_file in dist/*.deb dist/*.rpm dist/*.AppImage dist/*.tar.gz; do
+                    for package_file in dist/*.deb dist/*.rpm dist/*.AppImage dist/*.flatpak dist/*.tar.gz; do
                       [ -e "$package_file" ] || continue
                       filename=$(basename "$package_file")
                       extension="${filename##*.}"
                       if [[ "$filename" == *.tar.gz ]]; then
                         extension="tar.gz"
                       fi
-                      dest="${{ matrix.os }}-${{ matrix.arch }}.${extension}"
+                      dest="${{ matrix.artifactLabel }}.${extension}"
                       cp "$package_file" "$dest"
                       echo "Copied $package_file to $dest"
                     done
@@ -142,9 +166,9 @@ jobs:
             - name: Upload Artifacts
               uses: actions/upload-artifact@v4
               with:
-                  name: ${{ matrix.os }}-${{ matrix.arch }}
+                  name: ${{ matrix.artifactLabel }}
                   path: |
-                      ${{ matrix.os }}-${{ matrix.arch }}.*
+                      ${{ matrix.artifactLabel }}.*
                   if-no-files-found: warn
 
     release:
@@ -165,7 +189,7 @@ jobs:
             - name: List downloaded artifacts
               run: |
                   echo "Downloaded artifacts:"
-                  find . -type f -name "*" | grep -E "\.(exe|zip|dmg|pkg|deb|rpm|AppImage|tar\.gz)$" || echo "No package files found"
+                  find . -type f -name "*" | grep -E "\.(exe|zip|dmg|pkg|deb|rpm|AppImage|flatpak|tar\.gz)$" || echo "No package files found"
                   ls -la
 
             - name: Create Release
@@ -186,4 +210,5 @@ jobs:
                       **/*.deb
                       **/*.rpm
                       **/*.AppImage
+                      **/*.flatpak
                       **/*.tar.gz
