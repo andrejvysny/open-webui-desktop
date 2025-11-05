@@ -54,6 +54,8 @@ let SERVER_PID: number | null = null;
 
 function createWindow(show = true): void {
     // Create the browser window.
+    const useHiddenTitleBar =
+        process.platform !== "win32" && process.platform !== "darwin";
     mainWindow = new BrowserWindow({
         width: 700,
         height: 500,
@@ -61,16 +63,15 @@ function createWindow(show = true): void {
         minHeight: 400,
         icon: path.join(__dirname, "assets/icon.png"),
         show: false,
-        titleBarStyle: process.platform === "win32" ? "default" : "hidden",
-        trafficLightPosition: { x: 16, y: 16 },
         autoHideMenuBar: true,
+        titleBarStyle: useHiddenTitleBar ? "hidden" : "default",
+        ...(useHiddenTitleBar ? { titleBarOverlay: true } : {}),
         ...(process.platform === "win32"
             ? {
                   frame: true,
               }
             : {}),
         ...(process.platform === "linux" ? { icon } : {}),
-        ...(process.platform !== "darwin" ? { titleBarOverlay: true } : {}),
         webPreferences: {
             preload: join(__dirname, "../preload/index.js"),
             sandbox: false,

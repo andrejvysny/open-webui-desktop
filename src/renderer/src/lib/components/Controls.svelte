@@ -19,9 +19,7 @@
         class="flex flex-col w-full h-full relative text-gray-850 dark:text-gray-100"
     >
         <div
-            class="pt-3 pb-1.5 {$appInfo?.platform === 'darwin'
-                ? 'pl-22 pr-4'
-                : 'px-4'} w-full drag-region flex flex-row gap-3 items-center justify-between"
+            class="pt-3 pb-1.5 px-4 w-full drag-region flex flex-row gap-3 items-center justify-between"
         >
             <div class=" font-medium">Controls</div>
 
