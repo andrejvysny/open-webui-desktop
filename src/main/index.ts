@@ -77,6 +77,60 @@ function createWindow(show = true): void {
         },
     });
     mainWindow.setIcon(icon);
+    
+    // Set up session to allow loading from localhost
+    const baseAllowedHosts = new Set(["127.0.0.1", "localhost", "0.0.0.0"]);
+
+    session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+        let targetHost: string | null = null;
+        try {
+            targetHost = new URL(details.url).hostname;
+        } catch (error) {
+            // Ignore parsing issues and fall back to original headers.
+        }
+
+        let serverHost: string | null = null;
+        try {
+            serverHost = SERVER_URL ? new URL(SERVER_URL).hostname : null;
+        } catch (error) {
+            serverHost = null;
+        }
+
+        const allowListed = targetHost
+            ? baseAllowedHosts.has(targetHost) || (!!serverHost && targetHost === serverHost)
+            : false;
+
+        if (!allowListed) {
+            callback({ responseHeaders: details.responseHeaders });
+            return;
+        }
+
+        const csp = [
+            "default-src 'self' http://127.0.0.1:* http://localhost:*",
+            "base-uri 'self'",
+            "object-src 'none'",
+            "script-src 'self' 'unsafe-inline' blob: http://127.0.0.1:* http://localhost:*",
+            "style-src 'self' 'unsafe-inline' http://127.0.0.1:* http://localhost:* data:",
+            "img-src 'self' data: blob: https:",
+            "font-src 'self' data: https:",
+            "connect-src 'self' http://127.0.0.1:* http://localhost:* https: ws://127.0.0.1:* ws://localhost:* wss:",
+            "media-src 'self' blob: https:",
+            "frame-src 'self'",
+            "worker-src 'self' blob:"
+        ].join("; ");
+
+        const responseHeaders = { ...(details.responseHeaders ?? {}) };
+        for (const headerName of Object.keys(responseHeaders)) {
+            if (headerName.toLowerCase() === "content-security-policy") {
+                delete responseHeaders[headerName];
+            }
+        }
+
+        responseHeaders["Content-Security-Policy"] = [csp];
+
+        callback({ responseHeaders });
+    });
+    
     // Enables navigator.mediaDevices.getUserMedia API. See https://www.electronjs.org/docs/latest/api/desktop-capturer
     session.defaultSession.setDisplayMediaRequestHandler(
         (request, callback) => {
@@ -100,14 +154,66 @@ function createWindow(show = true): void {
         });
     }
 
+    // Helper to determine if URL should stay in-app
+    const isInternalUrl = (url: string): boolean => {
+        try {
+            const u = new URL(url);
+            const host = u.hostname;
+            return (
+                host === '127.0.0.1' ||
+                host === 'localhost' ||
+                host === '0.0.0.0'
+            );
+        } catch {
+            return false;
+        }
+    };
+
+    // Handle window.open() calls
     mainWindow.webContents.setWindowOpenHandler((details) => {
+        log.info(`setWindowOpenHandler: ${details.url}`);
+        if (isInternalUrl(details.url)) {
+            // Load internal URLs in the same window
+            log.info(`Loading internal URL in-app: ${details.url}`);
+            mainWindow?.loadURL(details.url);
+            return { action: "deny" };
+        }
+        // External URLs open in system browser
+        log.info(`Opening external URL in browser: ${details.url}`);
         openUrl(details.url);
         return { action: "deny" };
     });
 
+    // Handle navigation attempts (e.g., clicking links, form submissions)
+    mainWindow.webContents.on('will-navigate', (event, url) => {
+        log.info(`will-navigate to: ${url}`);
+        if (!isInternalUrl(url)) {
+            log.info(`Preventing navigation to external URL: ${url}`);
+            event.preventDefault();
+            openUrl(url);
+        } else {
+            log.info(`Allowing navigation to internal URL: ${url}`);
+        }
+        // Internal URLs are allowed to navigate normally
+    });
+
+    // Log successful navigations
+    mainWindow.webContents.on('did-navigate', (event, url) => {
+        log.info(`did-navigate to: ${url}`);
+    });
+
+    // Log navigation failures
+    mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription, validatedURL) => {
+        log.error(`did-fail-load: ${validatedURL} - Error ${errorCode}: ${errorDescription}`);
+    });
+
     globalShortcut.register("Alt+CommandOrControl+O", () => {
         if (SERVER_URL) {
-            openUrl(SERVER_URL);
+            // Load server URL in the app window instead of opening externally
+            mainWindow?.loadURL(SERVER_URL);
+            mainWindow?.show();
+            if (mainWindow?.isMinimized()) mainWindow?.restore();
+            mainWindow?.focus();
         } else {
             mainWindow?.show();
 
@@ -200,7 +306,9 @@ const updateTrayMenu = (status: string, url: string | null) => {
             enabled: !!url,
             click: () => {
                 if (url) {
-                    openUrl(url); // Open the URL in the default browser
+                    // Load server URL in the app window instead of external browser
+                    mainWindow?.loadURL(url);
+                    mainWindow?.show();
                 }
             },
         },
@@ -307,7 +415,7 @@ const startServerHandler = async () => {
             // Show system notification
             const notification = new Notification({
                 title: "Open WebUI",
-                body: "Open WebUI is now available and opened in your browser",
+                body: "Open WebUI is now available in the app",
             });
             notification.show();
 
@@ -315,7 +423,7 @@ const startServerHandler = async () => {
             mainWindow?.webContents.send("main:data", {
                 type: "server",
             });
-        });
+        }, mainWindow); // Pass mainWindow to load URL in-app
 
         return true; // Indicate success
     } catch (error) {
@@ -428,6 +536,31 @@ if (!gotTheLock) {
 
         // IPC test
         ipcMain.on("ping", () => log.info("pong"));
+
+        // Handle renderer:data IPC calls from Open WebUI
+        // This MUST be registered before any window is created
+        ipcMain.handle(
+            "renderer:data",
+            async (event, { type, data }: { type: string; data?: any }) => {
+                log.info(`Received renderer:data event of type: ${type}`, data);
+
+                switch (type) {
+                    case "app:info":
+                        return {
+                            name: app.getName(),
+                            version: app.getVersion(),
+                            isElectron: true,
+                        };
+                    case "app:data":
+                        return {
+                            config: CONFIG,
+                        };
+                    default:
+                        log.warn(`Unknown renderer:data event type: ${type}`);
+                        return { success: true };
+                }
+            }
+        );
 
         ipcMain.handle("get:version", async () => {
             return app.getVersion();

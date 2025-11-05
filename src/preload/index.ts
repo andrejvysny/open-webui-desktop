@@ -1,6 +1,73 @@
 import { ipcRenderer, contextBridge } from "electron";
 import { electronAPI } from "@electron-toolkit/preload";
 
+type Subscriber<T> = (value: T) => void;
+
+const createWritableFallback = <T>(initialValue: T) => {
+    let value = initialValue;
+    const subscribers = new Set<Subscriber<T>>();
+
+    const notify = () => {
+        subscribers.forEach((subscriber) => {
+            try {
+                subscriber(value);
+            } catch (error) {
+                console.error("appData subscriber failure", error);
+            }
+        });
+    };
+
+    return {
+        set(newValue: T) {
+            value = newValue;
+            notify();
+        },
+        update(updater: (current: T) => T) {
+            try {
+                value = updater(value);
+                notify();
+            } catch (error) {
+                console.error("appData update failure", error);
+            }
+        },
+        subscribe(run: Subscriber<T>) {
+            subscribers.add(run);
+            try {
+                run(value);
+            } catch (error) {
+                console.error("appData initial subscription failure", error);
+            }
+
+            return () => {
+                subscribers.delete(run);
+            };
+        },
+        get current() {
+            return value;
+        },
+    };
+};
+
+const appDataStore = createWritableFallback<any>(null);
+
+const exposeAppDataStore = () => {
+    if (process.contextIsolated) {
+        try {
+            contextBridge.exposeInMainWorld("appData", appDataStore);
+        } catch (error) {
+            // Ignore if the front-end already defines its own binding.
+        }
+    } else {
+        // @ts-ignore fallback assignment when context isolation is disabled
+        if (typeof window.appData === "undefined") {
+            // @ts-ignore
+            window.appData = appDataStore;
+        }
+    }
+};
+
+exposeAppDataStore();
+
 const isLocalSource = () => {
     // Check if the execution environment is local
     const origin = window.location.origin;
@@ -41,7 +108,13 @@ const api = {
     },
 
     send: async ({ type, data }: { type: string; data?: any }) => {
-        return await ipcRenderer.invoke("renderer:data", { type, data });
+        const response = await ipcRenderer.invoke("renderer:data", { type, data });
+
+        if (type === "app:data" && typeof response !== "undefined") {
+            appDataStore.set(response);
+        }
+
+        return response;
     },
 
     openInBrowser: async (url: string) => {
@@ -62,6 +135,21 @@ const api = {
         }
 
         return await ipcRenderer.invoke("app:info");
+    },
+
+    getAppData: async () => {
+        if (!isLocalSource()) {
+            throw new Error(
+                "Access restricted: This operation is only allowed in a local environment."
+            );
+        }
+
+        const response = await ipcRenderer.invoke("renderer:data", { type: "app:data" });
+        if (typeof response !== "undefined") {
+            appDataStore.set(response);
+        }
+
+        return response;
     },
 
     getVersion: async () => {

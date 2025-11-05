@@ -903,7 +903,8 @@ export function getServerLog(pid: number): string[] {
 // Helper function to check URL availability and auto-open
 export const checkUrlAndOpen = async (
     url: string,
-    callback: Function = async () => {}
+    callback: Function = async () => {},
+    mainWindow?: any // Optional BrowserWindow reference to load URL in-app
 ) => {
     const maxAttempts = 1800; // 60 minutes with 2-second intervals
     const interval = 2000; // 2 seconds
@@ -931,8 +932,18 @@ export const checkUrlAndOpen = async (
             try {
                 const isAvailable = await checkUrl();
                 if (isAvailable) {
-                    log.info("URL is now available, opening browser...");
-                    await openUrl(url);
+                    log.info("URL is now available, loading in app window...");
+                    
+                    // Load in the Electron window if mainWindow is provided, otherwise open externally
+                    if (mainWindow) {
+                        mainWindow.loadURL(url);
+                        mainWindow.show(); // Show the window after loading the URL
+                        if (mainWindow.isMinimized()) mainWindow.restore();
+                        mainWindow.focus();
+                    } else {
+                        await openUrl(url);
+                    }
+                    
                     await callback(); // Call the provided callback function
                     return; // Exit the polling loop
                 }
