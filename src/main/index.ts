@@ -57,8 +57,8 @@ function createWindow(show = true): void {
     const useHiddenTitleBar =
         process.platform !== "win32" && process.platform !== "darwin";
     mainWindow = new BrowserWindow({
-        width: 700,
-        height: 500,
+        width: 900,
+        height: 600,
         minWidth: 400,
         minHeight: 400,
         icon: path.join(__dirname, "assets/icon.png"),
